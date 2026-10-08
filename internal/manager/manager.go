@@ -2,6 +2,7 @@ package manager
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/sokinpui/golaunch/internal/launchd"
+	"github.com/sokinpui/golaunch/internal/ui"
 )
 
 type Manager struct {
@@ -348,88 +350,267 @@ func (m *Manager) Remove(target string) error {
 	return nil
 }
 
-func (m *Manager) Logs(target string, lines int, follow bool) error {
+type LogOptions struct {
+	Lines   int
+	Follow  bool
+	ShowOut bool
+	ShowErr bool
+}
+
+type streamMsg struct {
+	stream string
+	line   string
+}
+
+func (m *Manager) Logs(target string, opts LogOptions) error {
 	name, err := m.ResolveTarget(target)
 	if err != nil {
 		return err
 	}
 
-	logDir, err := launchd.ServiceLogDir(name)
+	stdoutPath, stderrPath, err := m.resolveLogPaths(name)
 	if err != nil {
 		return err
 	}
 
-	stdoutPath := filepath.Join(logDir, "stdout.log")
-	stderrPath := filepath.Join(logDir, "stderr.log")
-
-	if !fileExists(stdoutPath) && !fileExists(stderrPath) {
+	hasStdout := fileExists(stdoutPath)
+	hasStderr := fileExists(stderrPath)
+	if !hasStdout && !hasStderr {
 		return fmt.Errorf("no logs found for service '%s'", name)
 	}
 
-	targetLog := stdoutPath
-	if !fileExists(targetLog) {
-		targetLog = stderrPath
+	includeOut := opts.ShowOut || (!opts.ShowOut && !opts.ShowErr)
+	includeErr := opts.ShowErr || (!opts.ShowOut && !opts.ShowErr)
+
+	targetOut := ""
+	if includeOut && hasStdout {
+		targetOut = stdoutPath
+	}
+	targetErr := ""
+	if includeErr && hasStderr {
+		targetErr = stderrPath
 	}
 
-	if !follow {
-		return printLastLines(targetLog, lines)
+	if targetOut == "" && targetErr == "" {
+		if opts.ShowErr {
+			return fmt.Errorf("no stderr log found for service '%s'", name)
+		}
+		if opts.ShowOut {
+			return fmt.Errorf("no stdout log found for service '%s'", name)
+		}
+		return fmt.Errorf("no logs found for service '%s'", name)
 	}
 
-	return followFile(targetLog)
-}
-
-func printLastLines(filePath string, lineCount int) error {
-	file, err := os.Open(filePath)
-	if err != nil {
-		return err
+	var outLines []string
+	var errLines []string
+	if targetOut != "" && opts.Lines > 0 {
+		outLines, _ = readLastLines(targetOut, opts.Lines)
 	}
-	defer file.Close()
+	if targetErr != "" && opts.Lines > 0 {
+		errLines, _ = readLastLines(targetErr, opts.Lines)
+	}
 
-	var lines []string
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		lines = append(lines, scanner.Text())
-		if len(lines) > lineCount {
-			lines = lines[1:]
+	if !opts.Follow {
+		if len(outLines) == 0 && len(errLines) == 0 {
+			fmt.Println("(log files exist but are currently empty)")
+			return nil
+		}
+		if len(outLines) > 0 && len(errLines) == 0 {
+			for _, line := range outLines {
+				fmt.Println(line)
+			}
+			return nil
+		}
+		if len(outLines) == 0 && len(errLines) > 0 {
+			for _, line := range errLines {
+				fmt.Println(line)
+			}
+			return nil
+		}
+		fmt.Println(ui.RenderLogHeader("STDOUT"))
+		for _, line := range outLines {
+			fmt.Println(line)
+		}
+		fmt.Println()
+		fmt.Println(ui.RenderLogHeader("STDERR"))
+		for _, line := range errLines {
+			fmt.Println(line)
+		}
+		return nil
+	}
+
+	both := targetOut != "" && targetErr != ""
+	if both {
+		for _, line := range outLines {
+			fmt.Printf("%s %s\n", ui.RenderStreamBadge("STDOUT"), line)
+		}
+		for _, line := range errLines {
+			fmt.Printf("%s %s\n", ui.RenderStreamBadge("STDERR"), line)
+		}
+	} else {
+		for _, line := range outLines {
+			fmt.Println(line)
+		}
+		for _, line := range errLines {
+			fmt.Println(line)
 		}
 	}
 
-	for _, line := range lines {
-		fmt.Println(line)
-	}
-
-	return scanner.Err()
+	return followStreams(targetOut, targetErr)
 }
 
-func followFile(filePath string) error {
+func (m *Manager) resolveLogPaths(name string) (string, string, error) {
+	logDir, err := launchd.ServiceLogDir(name)
+	if err != nil {
+		return "", "", err
+	}
+	stdoutPath := filepath.Join(logDir, "stdout.log")
+	stderrPath := filepath.Join(logDir, "stderr.log")
+
+	activePlist, _ := launchd.PlistPath(name)
+	disabledPlist, _ := launchd.DisabledPlistPath(name)
+	plistPath := activePlist
+	if !fileExists(plistPath) && fileExists(disabledPlist) {
+		plistPath = disabledPlist
+	}
+
+	if fileExists(plistPath) {
+		if cfg, err := launchd.ReadPlistFile(plistPath); err == nil {
+			if cfg.StandardOutPath != "" {
+				stdoutPath = cfg.StandardOutPath
+			}
+			if cfg.StandardErrorPath != "" {
+				stderrPath = cfg.StandardErrorPath
+			}
+		}
+	}
+
+	return stdoutPath, stderrPath, nil
+}
+
+func readLastLines(filePath string, maxLines int) ([]string, error) {
+	if maxLines <= 0 {
+		return nil, nil
+	}
 	file, err := os.Open(filePath)
 	if err != nil {
-		return err
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer file.Close()
+
+	stat, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if stat.Size() == 0 {
+		return nil, nil
+	}
+
+	seeked := false
+	const maxDirectReadSize = 1024 * 1024
+	if stat.Size() > maxDirectReadSize {
+		seekBytes := int64(maxLines * 1024)
+		if seekBytes < maxDirectReadSize {
+			seekBytes = maxDirectReadSize
+		}
+		if stat.Size() > seekBytes {
+			if _, err := file.Seek(-seekBytes, io.SeekEnd); err == nil {
+				seeked = true
+			}
+		}
+	}
+
+	var lines []string
+	scanner := bufio.NewScanner(file)
+	buf := make([]byte, 64*1024)
+	scanner.Buffer(buf, 1024*1024)
+
+	if seeked {
+		scanner.Scan()
+	}
+
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
+		if len(lines) > maxLines {
+			lines = lines[1:]
+		}
+	}
+	return lines, scanner.Err()
+}
+
+func followStreams(targetOut, targetErr string) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	ch := make(chan streamMsg, 64)
+	both := targetOut != "" && targetErr != ""
+
+	if targetOut != "" {
+		go tailFile(ctx, targetOut, "STDOUT", ch)
+	}
+	if targetErr != "" {
+		go tailFile(ctx, targetErr, "STDERR", ch)
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case msg := <-ch:
+			if both {
+				fmt.Printf("%s %s", ui.RenderStreamBadge(msg.stream), msg.line)
+				continue
+			}
+			fmt.Print(msg.line)
+		}
+	}
+}
+
+func tailFile(ctx context.Context, filePath, stream string, ch chan<- streamMsg) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return
 	}
 	defer file.Close()
 
 	if _, err := file.Seek(0, io.SeekEnd); err != nil {
-		return err
+		return
 	}
 
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-
 	reader := bufio.NewReader(file)
+	var pending strings.Builder
 	for {
 		select {
-		case <-sigChan:
-			return nil
+		case <-ctx.Done():
+			return
 		default:
-			line, err := reader.ReadString('\n')
+			chunk, err := reader.ReadString('\n')
+			if len(chunk) > 0 {
+				pending.WriteString(chunk)
+				if strings.HasSuffix(chunk, "\n") {
+					line := pending.String()
+					pending.Reset()
+					select {
+					case <-ctx.Done():
+						return
+					case ch <- streamMsg{stream: stream, line: line}:
+					}
+				}
+			}
 			if err != nil {
 				if errors.Is(err, io.EOF) {
-					time.Sleep(250 * time.Millisecond)
+					select {
+					case <-ctx.Done():
+						return
+					case <-time.After(200 * time.Millisecond):
+					}
 					continue
 				}
-				return err
+				return
 			}
-			fmt.Print(line)
 		}
 	}
 }

@@ -167,8 +167,10 @@ func newLifecycleCmd(action, desc string, fn func(*manager.Manager, string) erro
 
 func newLogsCmd() *cobra.Command {
 	var (
-		lines  int
-		follow bool
+		lines   int
+		follow  bool
+		showOut bool
+		showErr bool
 	)
 
 	cmd := &cobra.Command{
@@ -187,7 +189,13 @@ func newLogsCmd() *cobra.Command {
 				ui.PrintError(err)
 				return err
 			}
-			if err := mgr.Logs(name, lines, follow); err != nil {
+			opts := manager.LogOptions{
+				Lines:   lines,
+				Follow:  follow,
+				ShowOut: showOut,
+				ShowErr: showErr,
+			}
+			if err := mgr.Logs(name, opts); err != nil {
 				ui.PrintError(err)
 				return err
 			}
@@ -197,6 +205,12 @@ func newLogsCmd() *cobra.Command {
 
 	cmd.Flags().IntVarP(&lines, "lines", "n", 50, "Number of lines to display")
 	cmd.Flags().BoolVarP(&follow, "follow", "f", false, "Follow log stream")
+	cmd.Flags().BoolVarP(&showErr, "stderr", "e", false, "Show standard error log only")
+	cmd.Flags().BoolVar(&showErr, "err", false, "Show standard error log only")
+	cmd.Flags().BoolVarP(&showOut, "stdout", "o", false, "Show standard output log only")
+	cmd.Flags().BoolVar(&showOut, "out", false, "Show standard output log only")
+	_ = cmd.Flags().MarkHidden("err")
+	_ = cmd.Flags().MarkHidden("out")
 	return cmd
 }
 

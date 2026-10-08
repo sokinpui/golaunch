@@ -59,6 +59,20 @@ func RenderStatusBadge(status launchd.ProcessStatus) string {
 	}
 }
 
+func RenderLogHeader(stream string) string {
+	if stream == "STDERR" {
+		return lipgloss.NewStyle().Bold(true).Foreground(RedColor).Render("─── STDERR ───")
+	}
+	return lipgloss.NewStyle().Bold(true).Foreground(AccentColor).Render("─── STDOUT ───")
+}
+
+func RenderStreamBadge(stream string) string {
+	if stream == "STDERR" {
+		return lipgloss.NewStyle().Bold(true).Foreground(RedColor).Render("[ERR]")
+	}
+	return lipgloss.NewStyle().Bold(true).Foreground(AccentColor).Render("[OUT]")
+}
+
 func PrintSuccess(msg string) {
 	fmt.Printf("%s %s\n", SuccessStyle.Render("✓"), msg)
 }
