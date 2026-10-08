@@ -26,6 +26,7 @@ type JobState struct {
 }
 
 type ServiceInfo struct {
+	ID           int
 	Name         string
 	Label        string
 	Status       ProcessStatus

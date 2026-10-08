@@ -28,7 +28,7 @@ func RenderServicesTable(services []launchd.ServiceInfo) string {
 	t := table.New().
 		Border(lipgloss.RoundedBorder()).
 		BorderStyle(lipgloss.NewStyle().Foreground(BorderColor)).
-		Headers("NAME", "STATUS", "PID", "EXIT", "COMMAND", "WORKING DIR")
+		Headers("ID", "NAME", "STATUS", "PID", "EXIT", "COMMAND", "WORKING DIR")
 
 	runningCount := 0
 	stoppedCount := 0
@@ -58,6 +58,7 @@ func RenderServicesTable(services []launchd.ServiceInfo) string {
 		}
 
 		t.Row(
+			strconv.Itoa(svc.ID),
 			svc.Name,
 			RenderStatusBadge(svc.Status),
 			pidStr,

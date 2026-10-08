@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"sort"
 	"strings"
 	"syscall"
@@ -76,8 +77,11 @@ func (m *Manager) Add(name string, cmdArgs []string, cwd string, customEnv map[s
 	programArgs := append([]string{binaryPath}, cmdArgs[1:]...)
 
 	envMap := make(map[string]string)
-	if pathEnv := os.Getenv("PATH"); pathEnv != "" {
-		envMap["PATH"] = pathEnv
+	inheritedEnvs := []string{"PATH", "HOME", "USER", "SHELL", "SSH_AUTH_SOCK"}
+	for _, key := range inheritedEnvs {
+		if val := os.Getenv(key); val != "" {
+			envMap[key] = val
+		}
 	}
 	for k, v := range customEnv {
 		envMap[k] = v
@@ -110,6 +114,7 @@ func (m *Manager) Add(name string, cmdArgs []string, cwd string, customEnv map[s
 		_ = os.Remove(activePlist)
 		return err
 	}
+	_ = m.client.Kickstart(launchd.FormatLabel(name))
 
 	return nil
 }
@@ -186,10 +191,53 @@ func (m *Manager) List() ([]launchd.ServiceInfo, error) {
 		return services[i].Name < services[j].Name
 	})
 
+	for i := range services {
+		services[i].ID = i
+	}
+
 	return services, nil
 }
 
-func (m *Manager) Start(name string) error {
+func (m *Manager) ResolveTarget(target string) (string, error) {
+	if target == "" {
+		return "", errors.New("service target cannot be empty")
+	}
+
+	activePlist, err := launchd.PlistPath(target)
+	if err == nil {
+		disabledPlist, _ := launchd.DisabledPlistPath(target)
+		if fileExists(activePlist) || fileExists(disabledPlist) {
+			return target, nil
+		}
+	}
+
+	id, err := strconv.Atoi(target)
+	if err != nil {
+		return "", fmt.Errorf("service '%s' not found", target)
+	}
+
+	services, err := m.List()
+	if err != nil {
+		return "", err
+	}
+
+	if id >= 0 && id < len(services) {
+		return services[id].Name, nil
+	}
+
+	if len(services) == 0 {
+		return "", errors.New("no managed services found")
+	}
+
+	return "", fmt.Errorf("service ID %d not found (available IDs: 0-%d)", id, len(services)-1)
+}
+
+func (m *Manager) Start(target string) error {
+	name, err := m.ResolveTarget(target)
+	if err != nil {
+		return err
+	}
+
 	activePlist, err := launchd.PlistPath(name)
 	if err != nil {
 		return err
@@ -221,7 +269,12 @@ func (m *Manager) Start(name string) error {
 	return m.client.Bootstrap(activePlist)
 }
 
-func (m *Manager) Stop(name string) error {
+func (m *Manager) Stop(target string) error {
+	name, err := m.ResolveTarget(target)
+	if err != nil {
+		return err
+	}
+
 	activePlist, err := launchd.PlistPath(name)
 	if err != nil {
 		return err
@@ -245,7 +298,12 @@ func (m *Manager) Stop(name string) error {
 	return nil
 }
 
-func (m *Manager) Restart(name string) error {
+func (m *Manager) Restart(target string) error {
+	name, err := m.ResolveTarget(target)
+	if err != nil {
+		return err
+	}
+
 	activePlist, err := launchd.PlistPath(name)
 	if err != nil {
 		return err
@@ -267,7 +325,12 @@ func (m *Manager) Restart(name string) error {
 	return m.client.Kickstart(label)
 }
 
-func (m *Manager) Remove(name string) error {
+func (m *Manager) Remove(target string) error {
+	name, err := m.ResolveTarget(target)
+	if err != nil {
+		return err
+	}
+
 	activePlist, err := launchd.PlistPath(name)
 	if err != nil {
 		return err
@@ -289,7 +352,12 @@ func (m *Manager) Remove(name string) error {
 	return nil
 }
 
-func (m *Manager) Logs(name string, lines int, follow bool) error {
+func (m *Manager) Logs(target string, lines int, follow bool) error {
+	name, err := m.ResolveTarget(target)
+	if err != nil {
+		return err
+	}
+
 	logDir, err := launchd.ServiceLogDir(name)
 	if err != nil {
 		return err

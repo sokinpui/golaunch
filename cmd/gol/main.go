@@ -144,8 +144,13 @@ func newLifecycleCmd(action, desc string, fn func(*manager.Manager, string) erro
 		Short: desc,
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name := args[0]
+			target := args[0]
 			mgr, err := manager.NewManager()
+			if err != nil {
+				ui.PrintError(err)
+				return err
+			}
+			name, err := mgr.ResolveTarget(target)
 			if err != nil {
 				ui.PrintError(err)
 				return err
@@ -171,8 +176,13 @@ func newLogsCmd() *cobra.Command {
 		Short: "Inspect or tail service logs",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name := args[0]
+			target := args[0]
 			mgr, err := manager.NewManager()
+			if err != nil {
+				ui.PrintError(err)
+				return err
+			}
+			name, err := mgr.ResolveTarget(target)
 			if err != nil {
 				ui.PrintError(err)
 				return err
