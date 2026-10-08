@@ -77,11 +77,8 @@ func (m *Manager) Add(name string, cmdArgs []string, cwd string, customEnv map[s
 	programArgs := append([]string{binaryPath}, cmdArgs[1:]...)
 
 	envMap := make(map[string]string)
-	inheritedEnvs := []string{"PATH", "HOME", "USER", "SHELL", "SSH_AUTH_SOCK"}
-	for _, key := range inheritedEnvs {
-		if val := os.Getenv(key); val != "" {
-			envMap[key] = val
-		}
+	if pathEnv := os.Getenv("PATH"); pathEnv != "" {
+		envMap["PATH"] = pathEnv
 	}
 	for k, v := range customEnv {
 		envMap[k] = v
@@ -114,7 +111,6 @@ func (m *Manager) Add(name string, cmdArgs []string, cwd string, customEnv map[s
 		_ = os.Remove(activePlist)
 		return err
 	}
-	_ = m.client.Kickstart(launchd.FormatLabel(name))
 
 	return nil
 }
