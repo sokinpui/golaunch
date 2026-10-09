@@ -32,7 +32,7 @@ func NewManager() (*Manager, error) {
 	return &Manager{client: client}, nil
 }
 
-func (m *Manager) Add(name string, cmdArgs []string, cwd string, customEnv map[string]string) error {
+func (m *Manager) Add(name string, cmdArgs []string, cwd string, customEnv map[string]string, origCmd string) error {
 	if name == "" {
 		return errors.New("service name cannot be empty")
 	}
@@ -94,6 +94,15 @@ func (m *Manager) Add(name string, cmdArgs []string, cwd string, customEnv map[s
 	stdoutPath := filepath.Join(logDir, "stdout.log")
 	stderrPath := filepath.Join(logDir, "stderr.log")
 
+	if origCmd == "" {
+		var envList []string
+		for k, v := range customEnv {
+			envList = append(envList, fmt.Sprintf("%s=%s", k, v))
+		}
+		sort.Strings(envList)
+		origCmd = FormatAddCommand(name, cwd, envList, strings.Join(cmdArgs, " "))
+	}
+
 	cfg := launchd.PlistConfig{
 		Label:                launchd.FormatLabel(name),
 		ProgramArguments:     programArgs,
@@ -102,6 +111,7 @@ func (m *Manager) Add(name string, cmdArgs []string, cwd string, customEnv map[s
 		KeepAlive:            true,
 		StandardOutPath:      stdoutPath,
 		StandardErrorPath:    stderrPath,
+		Comment:              origCmd,
 		EnvironmentVariables: envMap,
 	}
 
@@ -182,6 +192,7 @@ func (m *Manager) List() ([]launchd.ServiceInfo, error) {
 			IsDisabled:   isDisabled,
 			StdoutPath:   cfg.StandardOutPath,
 			StderrPath:   cfg.StandardErrorPath,
+			Comment:      cfg.Comment,
 		})
 	}
 
@@ -228,6 +239,82 @@ func (m *Manager) ResolveTarget(target string) (string, error) {
 	}
 
 	return "", fmt.Errorf("service ID %d not found (available IDs: 0-%d)", id, len(services)-1)
+}
+
+func (m *Manager) Get(target string) (*launchd.ServiceInfo, error) {
+	name, err := m.ResolveTarget(target)
+	if err != nil {
+		return nil, err
+	}
+
+	activePlist, err := launchd.PlistPath(name)
+	if err != nil {
+		return nil, err
+	}
+	disabledPlist, err := launchd.DisabledPlistPath(name)
+	if err != nil {
+		return nil, err
+	}
+
+	plistPath := activePlist
+	isDisabled := false
+	if !fileExists(plistPath) && fileExists(disabledPlist) {
+		plistPath = disabledPlist
+		isDisabled = true
+	}
+	if !fileExists(plistPath) {
+		return nil, fmt.Errorf("service '%s' not found", name)
+	}
+
+	cfg, err := launchd.ReadPlistFile(plistPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read plist for service '%s': %w", name, err)
+	}
+
+	label := launchd.FormatLabel(name)
+	liveJobs, _ := m.client.ListJobs()
+	jobState, isLoaded := liveJobs[label]
+
+	status := launchd.StatusStopped
+	pid := 0
+	exitCode := 0
+	if isLoaded {
+		pid = jobState.PID
+		exitCode = jobState.ExitCode
+		if pid > 0 {
+			status = launchd.StatusRunning
+		} else if exitCode != 0 {
+			status = launchd.StatusError
+		}
+	}
+
+	command := cfg.Comment
+	if command == "" {
+		command = reconstructAddCommand(name, cfg)
+	}
+
+	return &launchd.ServiceInfo{
+		Name:       name,
+		Label:      label,
+		Status:     status,
+		PID:        pid,
+		ExitCode:   exitCode,
+		Command:    strings.Join(cfg.ProgramArguments, " "),
+		WorkingDir: cfg.WorkingDirectory,
+		PlistPath:  plistPath,
+		IsDisabled: isDisabled,
+		StdoutPath: cfg.StandardOutPath,
+		StderrPath: cfg.StandardErrorPath,
+		Comment:    command,
+	}, nil
+}
+
+func (m *Manager) Info(target string) (string, error) {
+	svc, err := m.Get(target)
+	if err != nil {
+		return "", err
+	}
+	return svc.Comment, nil
 }
 
 func (m *Manager) Start(target string) error {
@@ -613,6 +700,58 @@ func tailFile(ctx context.Context, filePath, stream string, ch chan<- streamMsg)
 			}
 		}
 	}
+}
+
+func FormatAddCommand(name, cwd string, envList []string, rawCmd string) string {
+	hasFlags := cwd != "" || len(envList) > 0
+	if !hasFlags {
+		return fmt.Sprintf("gol add %s %s", name, quoteShell(rawCmd))
+	}
+
+	var parts []string
+	parts = append(parts, fmt.Sprintf("gol add %s", name))
+	if cwd != "" {
+		parts = append(parts, fmt.Sprintf("  --cwd %s", quoteShell(cwd)))
+	}
+	for _, env := range envList {
+		parts = append(parts, fmt.Sprintf("  --env %s", quoteShell(env)))
+	}
+	parts = append(parts, fmt.Sprintf("  %s", quoteShell(rawCmd)))
+
+	return strings.Join(parts, " \\\n")
+}
+
+func reconstructAddCommand(name string, cfg *launchd.PlistConfig) string {
+	var envList []string
+	for k, v := range cfg.EnvironmentVariables {
+		if k == "PATH" {
+			continue
+		}
+		envList = append(envList, fmt.Sprintf("%s=%s", k, v))
+	}
+	sort.Strings(envList)
+
+	args := cfg.ProgramArguments
+	if len(args) > 0 {
+		bin := args[0]
+		base := filepath.Base(bin)
+		if resolved, err := exec.LookPath(base); err == nil && resolved == bin {
+			args = append([]string{base}, args[1:]...)
+		}
+	}
+
+	rawCmd := strings.Join(args, " ")
+	return FormatAddCommand(name, cfg.WorkingDirectory, envList, rawCmd)
+}
+
+func quoteShell(s string) string {
+	if s == "" {
+		return `""`
+	}
+	if !strings.ContainsAny(s, " \t\n\"'$`\\!*?~#&;()<>|[]{}") {
+		return s
+	}
+	return `"` + strings.ReplaceAll(strings.ReplaceAll(s, `\`, `\\`), `"`, `\"`) + `"`
 }
 
 func fileExists(path string) bool {

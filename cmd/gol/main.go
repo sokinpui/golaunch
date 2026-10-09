@@ -34,6 +34,7 @@ func newRootCmd() *cobra.Command {
 		newRestartCmd(),
 		newRemoveCmd(),
 		newLogsCmd(),
+		newInfoCmd(),
 	)
 
 	return cmd
@@ -97,7 +98,8 @@ func newAddCmd() *cobra.Command {
 				}
 			}
 
-			if err := mgr.Add(name, cmdArgs, cwd, envMap); err != nil {
+			origCmd := manager.FormatAddCommand(name, cwd, envList, rawCmd)
+			if err := mgr.Add(name, cmdArgs, cwd, envMap, origCmd); err != nil {
 				ui.PrintError(err)
 				return err
 			}
@@ -109,6 +111,38 @@ func newAddCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&cwd, "cwd", "", "Working directory")
 	cmd.Flags().StringArrayVar(&envList, "env", nil, "Environment variable in KEY=VALUE format")
+	return cmd
+}
+
+func newInfoCmd() *cobra.Command {
+	var raw bool
+
+	cmd := &cobra.Command{
+		Use:   "info <name>",
+		Short: "Show service details and original registration command",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			target := args[0]
+			mgr, err := manager.NewManager()
+			if err != nil {
+				ui.PrintError(err)
+				return err
+			}
+			svc, err := mgr.Get(target)
+			if err != nil {
+				ui.PrintError(err)
+				return err
+			}
+			if raw {
+				fmt.Println(svc.Comment)
+				return nil
+			}
+			fmt.Println(ui.RenderServiceInfo(*svc))
+			return nil
+		},
+	}
+
+	cmd.Flags().BoolVarP(&raw, "raw", "r", false, "Print raw command only")
 	return cmd
 }
 

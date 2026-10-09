@@ -17,6 +17,7 @@ type PlistConfig struct {
 	StandardOutPath      string            `plist:"StandardOutPath,omitempty"`
 	StandardErrorPath    string            `plist:"StandardErrorPath,omitempty"`
 	EnvironmentVariables map[string]string `plist:"EnvironmentVariables,omitempty"`
+	Comment              string            `plist:"Comment,omitempty"`
 }
 
 type JobState struct {
@@ -38,4 +39,5 @@ type ServiceInfo struct {
 	IsDisabled   bool
 	StdoutPath   string
 	StderrPath   string
+	Comment      string
 }

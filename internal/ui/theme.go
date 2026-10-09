@@ -14,6 +14,9 @@ var (
 	RedColor      = lipgloss.Color("#EF4444")
 	BorderColor   = lipgloss.Color("#383838")
 	DimText       = lipgloss.Color("#8A8A8A")
+	CyanColor     = lipgloss.Color("#38BDF8")
+	YellowColor   = lipgloss.Color("#FBBF24")
+	WhiteColor    = lipgloss.Color("#FFFFFF")
 
 	TitleStyle = lipgloss.NewStyle().
 			Bold(true).
