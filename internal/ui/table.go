@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/lipgloss/table"
@@ -28,7 +29,7 @@ func RenderServicesTable(services []launchd.ServiceInfo) string {
 	t := table.New().
 		Border(lipgloss.RoundedBorder()).
 		BorderStyle(lipgloss.NewStyle().Foreground(BorderColor)).
-		Headers("ID", "NAME", "STATUS", "PID", "EXIT", "COMMAND", "WORKING DIR")
+		Headers("ID", "NAME", "STATUS", "PID", "PORT", "EXIT", "COMMAND", "WORKING DIR")
 
 	runningCount := 0
 	stoppedCount := 0
@@ -40,6 +41,15 @@ func RenderServicesTable(services []launchd.ServiceInfo) string {
 			runningCount++
 		} else {
 			stoppedCount++
+		}
+
+		portStr := "-"
+		if len(svc.Ports) > 0 {
+			var portParts []string
+			for _, port := range svc.Ports {
+				portParts = append(portParts, strconv.Itoa(port))
+			}
+			portStr = strings.Join(portParts, ", ")
 		}
 
 		exitStr := "-"
@@ -62,6 +72,7 @@ func RenderServicesTable(services []launchd.ServiceInfo) string {
 			svc.Name,
 			RenderStatusBadge(svc.Status),
 			pidStr,
+			portStr,
 			exitStr,
 			cmdDisplay,
 			cwdDisplay,

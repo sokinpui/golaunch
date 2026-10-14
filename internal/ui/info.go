@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -34,6 +35,17 @@ func RenderServiceInfo(svc launchd.ServiceInfo) string {
 	var metaLines []string
 	if svc.WorkingDir != "" {
 		metaLines = append(metaLines, fmt.Sprintf("%s %s", metaKey.Render("Working Dir:"), metaVal.Render(svc.WorkingDir)))
+	}
+	if len(svc.Ports) > 0 {
+		var portParts []string
+		for _, port := range svc.Ports {
+			portParts = append(portParts, strconv.Itoa(port))
+		}
+		label := "Port:"
+		if len(portParts) > 1 {
+			label = "Ports:"
+		}
+		metaLines = append(metaLines, fmt.Sprintf("%s %s", metaKey.Render(label), metaVal.Render(strings.Join(portParts, ", "))))
 	}
 	if svc.PlistPath != "" {
 		metaLines = append(metaLines, fmt.Sprintf("%s %s", metaKey.Render("Plist:"), metaVal.Render(svc.PlistPath)))

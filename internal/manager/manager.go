@@ -204,6 +204,22 @@ func (m *Manager) List() ([]launchd.ServiceInfo, error) {
 		services[i].ID = i
 	}
 
+	var activePIDs []int
+	for _, svc := range services {
+		if svc.PID > 0 {
+			activePIDs = append(activePIDs, svc.PID)
+		}
+	}
+
+	if len(activePIDs) > 0 {
+		portMap := launchd.DiscoverListeningPorts(activePIDs)
+		for i := range services {
+			if services[i].PID > 0 {
+				services[i].Ports = portMap[services[i].PID]
+			}
+		}
+	}
+
 	return services, nil
 }
 
@@ -293,10 +309,17 @@ func (m *Manager) Get(target string) (*launchd.ServiceInfo, error) {
 		command = reconstructAddCommand(name, cfg)
 	}
 
+	var ports []int
+	if pid > 0 {
+		portMap := launchd.DiscoverListeningPorts([]int{pid})
+		ports = portMap[pid]
+	}
+
 	return &launchd.ServiceInfo{
 		Name:       name,
 		Label:      label,
 		Status:     status,
+		Ports:      ports,
 		PID:        pid,
 		ExitCode:   exitCode,
 		Command:    strings.Join(cfg.ProgramArguments, " "),

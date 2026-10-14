@@ -32,6 +32,7 @@ type ServiceInfo struct {
 	Label        string
 	Status       ProcessStatus
 	PID          int
+	Ports        []int
 	ExitCode     int
 	Command      string
 	WorkingDir   string
